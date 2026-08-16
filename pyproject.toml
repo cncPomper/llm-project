@@ -1,0 +1,42 @@
+[project]
+name = "podcast-explorer"
+version = "0.1.0"
+description = "Multi-speaker podcast transcript RAG with timestamped YouTube deep links"
+readme = "README.md"
+# Pinned to 3.11 to match the python:3.11-slim container. The dependency
+# pins below predate 3.13 and ship no cp313 wheels, so raising this means
+# re-resolving them (psycopg2-binary, pandas, tiktoken, numpy at minimum).
+requires-python = ">=3.11,<3.12"
+
+dependencies = [
+    "youtube-transcript-api==0.6.2",
+    "faster-whisper==1.0.3",
+    "prefect==2.19.9",
+    "qdrant-client==1.9.1",
+    "psycopg2-binary==2.9.9",
+    "sentence-transformers==3.0.1",
+    "rank-bm25==0.2.2",
+    "openai==1.35.10",
+    "streamlit==1.37.0",
+    "pyyaml==6.0.1",
+    "pandas==2.2.2",
+    "python-dotenv==1.0.1",
+    "tiktoken==0.7.0",
+    "tqdm==4.66.4",
+]
+
+[tool.uv]
+# These direct pins are all mid-2024 releases, but several declare very loose
+# bounds on their own dependencies -- so an unconstrained resolve pairs them
+# with transitive packages published two years later, and they break:
+#
+#   prefect 2.19.9 (`pydantic<3`)  + pydantic 2.13  -> import prefect fails,
+#                                     "TypeError: 'type' object is not iterable"
+#   openai 1.35.10 (`httpx<1`)     + httpx 0.28     -> OpenAI() fails,
+#                                     "unexpected keyword argument 'proxies'"
+#
+# Resolving as of a date contemporaneous with the pins fixes the whole class
+# of problem at once, instead of hand-pinning each transitive dep as it breaks.
+# Only affects `uv lock`; uv.lock is committed, so installs are reproducible
+# regardless. Raise this date only alongside upgrading the pins above.
+exclude-newer = "2024-08-15T00:00:00Z"

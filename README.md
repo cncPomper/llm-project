@@ -170,22 +170,23 @@ The `.env` hostnames (`postgres`, `qdrant`) only resolve inside the Compose
 network, so override them for host-side runs:
 
 ```bash
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+uv sync                       # creates .venv from uv.lock, exactly pinned
 
 export POSTGRES_HOST=localhost QDRANT_URL=http://localhost:6333
 # Windows PowerShell:
 #   $env:POSTGRES_HOST="localhost"; $env:QDRANT_URL="http://localhost:6333"
 
-python -m ingestion.flow      # fetch -> chunk -> embed -> load (Prefect)
+uv run python -m ingestion.flow    # fetch -> chunk -> embed -> load (Prefect)
 ```
+
+`uv run` executes inside the project venv, so there is no activate step.
 
 **3. Evaluate** (same shell, same env overrides — costs OpenAI tokens):
 
 ```bash
-python -m eval.generate_ground_truth
-python -m eval.retrieval_eval
-python -m eval.llm_eval
+uv run python -m eval.generate_ground_truth
+uv run python -m eval.retrieval_eval
+uv run python -m eval.llm_eval
 ```
 
 **4. Start the app:**
@@ -204,7 +205,13 @@ Grafana isn't provisioned automatically: add Postgres as a datasource
 
 ## 10. Reproducibility
 
-- All dependency versions pinned in `requirements.txt`.
+- Dependencies are managed with [uv](https://docs.astral.sh/uv/). Direct
+  pins live in `pyproject.toml`; `uv.lock` pins the full transitive tree
+  (162 packages) with hashes and is committed, so `uv sync` reproduces the
+  exact environment. The container installs from the same lock via
+  `uv sync --frozen`, which fails rather than silently re-resolving if the
+  lock and `pyproject.toml` drift apart.
+- Python is pinned to 3.11 (`.python-version`), matching the container.
 - `episodes.yaml` lists the exact video IDs used — transcripts are fetched
   live via the YouTube API so no large data files need to be committed.
 - `.env.example` documents every required environment variable.
@@ -237,7 +244,8 @@ podcast-explorer/
 ├── README.md
 ├── docker-compose.yml
 ├── Dockerfile
-├── requirements.txt
+├── pyproject.toml
+├── uv.lock
 ├── .env.example
 ├── episodes.yaml
 ├── ingestion/

@@ -4,10 +4,27 @@ the compared LLM strategies in eval/llm_eval.py.
 """
 import os
 
+from dotenv import load_dotenv
 from openai import OpenAI
 
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+# Loaded here, at import, because importers (streamlit_app, llm_eval) call
+# load_dotenv() *after* importing this module -- so anything read at module
+# level would miss .env entirely on a local run.
+load_dotenv()
+
 MODEL = os.environ.get("LLM_MODEL", "gpt-4o-mini")
+
+_client = None
+
+
+def get_client() -> OpenAI:
+    """Built lazily: constructing OpenAI() at import time raises when
+    OPENAI_API_KEY is absent, which would break `import rag.prompts` for
+    callers that never touch the LLM (e.g. retrieval-only eval runs)."""
+    global _client
+    if _client is None:
+        _client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+    return _client
 
 REWRITE_SYSTEM_PROMPT = """You rewrite casual, conversational podcast-listener \
 questions into concise, keyword-rich search queries optimized for retrieval \
@@ -27,7 +44,7 @@ Rules:
 
 
 def rewrite_query(raw_query: str) -> str:
-    resp = client.chat.completions.create(
+    resp = get_client().chat.completions.create(
         model=MODEL,
         messages=[
             {"role": "system", "content": REWRITE_SYSTEM_PROMPT},
@@ -57,5 +74,5 @@ def build_answer_prompt(question: str, chunks: list[dict]) -> list[dict]:
 
 def generate_answer(question: str, chunks: list[dict]) -> str:
     messages = build_answer_prompt(question, chunks)
-    resp = client.chat.completions.create(model=MODEL, messages=messages, temperature=0.2)
+    resp = get_client().chat.completions.create(model=MODEL, messages=messages, temperature=0.2)
     return resp.choices[0].message.content.strip()

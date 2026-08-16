@@ -1,0 +1,16 @@
+# The image builds its own venv via `uv sync`; copying the host one over it
+# would break the container (wrong platform, wrong interpreter path).
+.venv/
+
+.git/
+.gitignore
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Secrets stay out of the image -- compose injects them via env_file.
+.env
+
+# Fetched transcripts are rebuilt by the ingestion pipeline.
+data/
+.streamlit/
