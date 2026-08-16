@@ -14,14 +14,24 @@ a HuggingFace token and a GPU for reasonable speed.
 import json
 import os
 import re
+import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import yaml
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
+from youtube_transcript_api import (
+    YouTubeTranscriptApi,
+    TranscriptsDisabled,
+    NoTranscriptFound,
+    RequestBlocked,
+)
+from youtube_transcript_api.proxies import GenericProxyConfig, WebshareProxyConfig
 
 RAW_DIR = Path(__file__).parent.parent / "data" / "raw_transcripts"
 RAW_DIR.mkdir(parents=True, exist_ok=True)
+
+# Seconds to wait between fetches. YouTube rate-limits bursts from one IP.
+FETCH_DELAY_SECONDS = float(os.environ.get("FETCH_DELAY_SECONDS", "3"))
 
 _VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _YOUTUBE_HOSTS = {
@@ -64,6 +74,26 @@ def load_episode_list(path: str = "episodes.yaml") -> list[dict]:
         return yaml.safe_load(f)["episodes"]
 
 
+def build_proxy_config():
+    """Optional, opt-in. Returns None unless proxy env vars are set.
+
+    YouTube blocks IPs that make too many transcript requests, and blocks
+    most cloud-provider ranges outright. Routing through a residential proxy
+    is the library's documented workaround; see .env.example.
+    """
+    ws_user = os.environ.get("WEBSHARE_PROXY_USERNAME")
+    ws_pass = os.environ.get("WEBSHARE_PROXY_PASSWORD")
+    if ws_user and ws_pass:
+        return WebshareProxyConfig(proxy_username=ws_user, proxy_password=ws_pass)
+
+    http_url = os.environ.get("PROXY_HTTP_URL")
+    https_url = os.environ.get("PROXY_HTTPS_URL")
+    if http_url or https_url:
+        return GenericProxyConfig(http_url=http_url, https_url=https_url)
+
+    return None
+
+
 def fetch_transcript(video_id: str) -> list[dict]:
     """Returns a list of {text, start, duration} segments, in seconds.
 
@@ -72,9 +102,13 @@ def fetch_transcript(video_id: str) -> list[dict]:
     returning a FetchedTranscript. `.to_raw_data()` converts it back to the
     plain list-of-dicts shape the chunking step already expects, so nothing
     downstream had to change.
+
+    RequestBlocked/IpBlocked deliberately propagate -- the caller stops the
+    run rather than burning through the remaining episodes against a block.
     """
+    api = YouTubeTranscriptApi(proxy_config=build_proxy_config())
     try:
-        return YouTubeTranscriptApi().fetch(video_id).to_raw_data()
+        return api.fetch(video_id).to_raw_data()
     except (TranscriptsDisabled, NoTranscriptFound):
         return []
 
@@ -98,15 +132,37 @@ def transcribe_with_whisper(video_id: str, audio_path: str) -> list[dict]:
 
 def main():
     episodes = load_episode_list()
-    for ep in episodes:
+    fetched = 0
+
+    for i, ep in enumerate(episodes):
         vid = ep["video_id"]
         out_path = RAW_DIR / f"{vid}.json"
         if out_path.exists():
             print(f"[skip] {vid} already fetched")
             continue
 
+        # Space out requests. Fetching several long episodes back-to-back is
+        # what gets an IP rate-limited by YouTube in the first place.
+        if i > 0:
+            time.sleep(FETCH_DELAY_SECONDS)
+
         print(f"[fetch] {vid} -- {ep.get('title', '')}")
-        segments = fetch_transcript(vid)
+        try:
+            segments = fetch_transcript(vid)
+        except RequestBlocked:
+            # Covers IpBlocked too. Retrying immediately extends the block,
+            # so stop here -- everything fetched so far is already on disk
+            # and the next run skips it.
+            remaining = len(episodes) - i
+            print(
+                f"\n  YouTube is rate-limiting this IP -- stopping with {remaining} "
+                f"episode(s) still to fetch.\n"
+                f"  {fetched} episode(s) saved to {RAW_DIR}; re-running resumes "
+                f"from where this left off.\n"
+                f"  Wait for the block to lapse (usually minutes to hours), raise "
+                f"FETCH_DELAY_SECONDS, or configure a proxy -- see .env.example."
+            )
+            break
 
         if not segments:
             print(f"  no captions found for {vid}; use transcribe_with_whisper() "
@@ -115,7 +171,11 @@ def main():
 
         with open(out_path, "w") as f:
             json.dump({"video_id": vid, "meta": ep, "segments": segments}, f, indent=2)
+        fetched += 1
         print(f"  wrote {len(segments)} segments -> {out_path}")
+
+    on_disk = len(list(RAW_DIR.glob("*.json")))
+    print(f"\n[fetch] {fetched} newly fetched; {on_disk}/{len(episodes)} episodes now on disk.")
 
 
 if __name__ == "__main__":

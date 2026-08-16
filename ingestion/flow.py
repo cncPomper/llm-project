@@ -18,8 +18,12 @@ from prefect import flow, task
 from ingestion import fetch_transcripts, ingest_pipeline
 
 
-@task(retries=2, retry_delay_seconds=30)
+@task(retries=0)
 def fetch_task():
+    """No retries on purpose. The dominant failure here is YouTube
+    rate-limiting the IP, and retrying 30s later just extends the block.
+    fetch_transcripts.main() handles it instead: it stops cleanly, keeps
+    what it already wrote, and resumes on the next run."""
     fetch_transcripts.main()
 
 
