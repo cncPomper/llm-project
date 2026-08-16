@@ -10,7 +10,7 @@ Evaluates each retrieval strategy against eval/ground_truth.jsonl using:
 chunk text and retrieved chunk/parent text, since parent-document
 retrieval returns a different (larger) span than the original flat chunk.
 
-Run: python eval/retrieval_eval.py
+Run from the repo root: python -m eval.retrieval_eval
 Writes a Markdown table appended to eval/results.md
 """
 import json

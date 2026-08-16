@@ -3,8 +3,10 @@ Prefect flow that automates the full ingestion pipeline:
 
     fetch_transcripts  ->  ingest_pipeline (chunk + embed + load)
 
-Run once:
-    python ingestion/flow.py
+Run once, from the repo root (the `-m` form matters -- running this file by
+path puts ingestion/ on sys.path instead of the repo root, so the
+`from ingestion import ...` below would fail):
+    python -m ingestion.flow
 
 Or deploy it to run on a schedule (e.g. nightly, to pick up new episodes
 added to episodes.yaml) with:
