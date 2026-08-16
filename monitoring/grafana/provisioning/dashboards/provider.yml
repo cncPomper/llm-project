@@ -1,0 +1,13 @@
+# Loads any dashboard JSON found in the path below at startup.
+# docker-compose mounts monitoring/grafana/dashboard.json into it.
+apiVersion: 1
+
+providers:
+  - name: podcast-explorer
+    type: file
+    folder: Podcast Explorer
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

@@ -130,13 +130,14 @@ a one-off notebook: fetch → chunk (both strategies) → embed → load.
 
 All queries, retrieved sources, generated answers, latency, and feedback
 are logged to Postgres (`monitoring/schema.sql`). `monitoring/grafana/`
-contains a dashboard JSON with 5 charts:
+contains a provisioned dashboard with 6 panels:
 
 1. Query volume over time
 2. 👍/👎 feedback ratio over time
 3. Average end-to-end latency
-4. Most-asked-about episodes/topics
-5. Retrieval hit-rate (sampled) over time
+4. Recent questions (with source count and latency)
+5. Negative feedback count, last 7 days
+6. Most-cited episodes, by indexed chunk count
 
 ## 9. Containerization
 
@@ -199,9 +200,11 @@ docker compose up --build -d app
 - Grafana: http://localhost:3000 (default admin/admin)
 - Qdrant dashboard: http://localhost:6333/dashboard
 
-Grafana isn't provisioned automatically: add Postgres as a datasource
-(host `postgres:5432`, matching your `.env` credentials), then import
-`monitoring/grafana/dashboard.json`.
+Grafana provisions itself at startup — `monitoring/grafana/provisioning/`
+defines the Postgres datasource and a dashboard provider, and
+`monitoring/grafana/dashboard.json` is mounted into the path it scans. No
+manual datasource setup or dashboard import: the dashboard is under the
+"Podcast Explorer" folder as soon as the container is up.
 
 ## 10. Reproducibility
 

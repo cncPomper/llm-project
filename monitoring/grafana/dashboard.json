@@ -1,13 +1,20 @@
 {
+  "uid": "podcast-explorer",
   "title": "Podcast Knowledge Explorer - Monitoring",
   "timezone": "browser",
+  "refresh": "1m",
+  "time": {"from": "now-7d", "to": "now"},
   "panels": [
     {
       "id": 1,
       "title": "Query Volume Over Time",
       "type": "timeseries",
+      "datasource": {"type": "postgres", "uid": "podcast-postgres"},
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
       "targets": [{
+        "refId": "A",
+        "datasource": {"type": "postgres", "uid": "podcast-postgres"},
+        "rawQuery": true,
         "rawSql": "SELECT date_trunc('hour', created_at) AS time, count(*) AS queries FROM query_log GROUP BY 1 ORDER BY 1",
         "format": "time_series"
       }]
@@ -16,8 +23,13 @@
       "id": 2,
       "title": "Feedback Ratio (thumbs up / total)",
       "type": "timeseries",
+      "datasource": {"type": "postgres", "uid": "podcast-postgres"},
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "fieldConfig": {"defaults": {"min": 0, "max": 1, "unit": "percentunit"}, "overrides": []},
       "targets": [{
+        "refId": "A",
+        "datasource": {"type": "postgres", "uid": "podcast-postgres"},
+        "rawQuery": true,
         "rawSql": "SELECT date_trunc('day', created_at) AS time, avg(is_positive::int) AS positive_ratio FROM feedback GROUP BY 1 ORDER BY 1",
         "format": "time_series"
       }]
@@ -26,29 +38,56 @@
       "id": 3,
       "title": "Average Latency (ms)",
       "type": "stat",
+      "datasource": {"type": "postgres", "uid": "podcast-postgres"},
       "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+      "fieldConfig": {"defaults": {"unit": "ms", "decimals": 0}, "overrides": []},
       "targets": [{
-        "rawSql": "SELECT avg(latency_ms) FROM query_log WHERE created_at > now() - interval '7 days'",
+        "refId": "A",
+        "datasource": {"type": "postgres", "uid": "podcast-postgres"},
+        "rawQuery": true,
+        "rawSql": "SELECT avg(latency_ms) AS \"Average latency\" FROM query_log WHERE created_at > now() - interval '7 days'",
         "format": "table"
       }]
     },
     {
       "id": 4,
-      "title": "Top Questions (most recent 50)",
+      "title": "Recent Questions",
       "type": "table",
+      "datasource": {"type": "postgres", "uid": "podcast-postgres"},
       "gridPos": {"h": 8, "w": 16, "x": 8, "y": 8},
       "targets": [{
-        "rawSql": "SELECT question, num_sources, latency_ms, created_at FROM query_log ORDER BY created_at DESC LIMIT 50",
+        "refId": "A",
+        "datasource": {"type": "postgres", "uid": "podcast-postgres"},
+        "rawQuery": true,
+        "rawSql": "SELECT created_at, question, num_sources, latency_ms FROM query_log ORDER BY created_at DESC LIMIT 50",
         "format": "table"
       }]
     },
     {
       "id": 5,
-      "title": "Negative Feedback Count (last 7 days)",
+      "title": "Negative Feedback (last 7 days)",
       "type": "stat",
+      "datasource": {"type": "postgres", "uid": "podcast-postgres"},
       "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
       "targets": [{
-        "rawSql": "SELECT count(*) FROM feedback WHERE is_positive = false AND created_at > now() - interval '7 days'",
+        "refId": "A",
+        "datasource": {"type": "postgres", "uid": "podcast-postgres"},
+        "rawQuery": true,
+        "rawSql": "SELECT count(*) AS \"Negative feedback\" FROM feedback WHERE is_positive = false AND created_at > now() - interval '7 days'",
+        "format": "table"
+      }]
+    },
+    {
+      "id": 6,
+      "title": "Most-Cited Episodes",
+      "type": "table",
+      "datasource": {"type": "postgres", "uid": "podcast-postgres"},
+      "gridPos": {"h": 8, "w": 16, "x": 8, "y": 16},
+      "targets": [{
+        "refId": "A",
+        "datasource": {"type": "postgres", "uid": "podcast-postgres"},
+        "rawQuery": true,
+        "rawSql": "SELECT f.title AS episode, count(*) AS chunks_indexed FROM flat_chunks f GROUP BY 1 ORDER BY 2 DESC LIMIT 20",
         "format": "table"
       }]
     }

@@ -1,0 +1,21 @@
+# Provisioned automatically at Grafana start -- no clicking through the UI.
+# Values come from the env vars docker-compose passes into the container,
+# so they track whatever is set in .env.
+apiVersion: 1
+
+datasources:
+  - name: Postgres
+    # Referenced by uid from dashboard.json; keep the two in sync.
+    uid: podcast-postgres
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    database: $POSTGRES_DB
+    user: $POSTGRES_USER
+    isDefault: true
+    editable: false
+    secureJsonData:
+      password: $POSTGRES_PASSWORD
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
