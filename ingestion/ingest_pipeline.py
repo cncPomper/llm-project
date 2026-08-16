@@ -44,6 +44,21 @@ FLAT_OVERLAP_TOKENS = 50
 CHILD_CHUNK_TOKENS = 100
 PARENT_WINDOW_TOKENS = 600
 
+# Chunks are embedded in batches rather than one call per chunk; on CPU this
+# is the difference between minutes and hours for a multi-hour episode.
+EMBED_BATCH_SIZE = int(os.environ.get("EMBED_BATCH_SIZE", "64"))
+
+
+def chunk_uuid(video_id: str, kind: str, index: int) -> str:
+    """Deterministic chunk ID, derived from (video, kind, position).
+
+    Random uuid4s would make every re-run insert a fresh copy of the same
+    chunk into Qdrant. Deriving the ID means re-ingesting an episode
+    overwrites its own points instead -- which is what lets an interrupted
+    run be resumed by simply running it again.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{video_id}:{kind}:{index}"))
+
 
 def n_tokens(text: str) -> int:
     return len(ENCODER.encode(text))
@@ -69,22 +84,57 @@ def sliding_window_chunks(segments: list[dict], window_tokens: int, overlap_toke
 
         if buf_tokens >= window_tokens:
             yield " ".join(buf_text), start_time, end_time
-            # keep the tail as overlap for the next chunk
-            tail = " ".join(buf_text)
-            tail_tokens = ENCODER.encode(tail)[-overlap_tokens:]
-            buf_text = [ENCODER.decode(tail_tokens)]
-            buf_tokens = len(tail_tokens)
+            if overlap_tokens > 0:
+                # keep the tail as overlap for the next chunk
+                tail = " ".join(buf_text)
+                tail_tokens = ENCODER.encode(tail)[-overlap_tokens:]
+                buf_text = [ENCODER.decode(tail_tokens)]
+                buf_tokens = len(tail_tokens)
+            else:
+                # Must be handled separately: `tokens[-0:]` is the WHOLE list,
+                # not an empty one, so the zero-overlap path would carry the
+                # entire buffer forward and re-emit it on every later segment.
+                buf_text, buf_tokens = [], 0
             start_time = end_time
 
     if buf_text:
         yield " ".join(buf_text), start_time, segments[-1]["start"] + segments[-1].get("duration", 0)
 
 
+def token_window_chunks(text: str, window_tokens: int, overlap_tokens: int):
+    """Split a single block of text into overlapping token windows.
+
+    Needed because sliding_window_chunks only breaks *between* segments: fed
+    one long block it just hands the whole block back. Child chunks have to
+    be split *within* the parent window, so they need a token-level split.
+
+    Yields (text, start_fraction, end_fraction), the fractions giving each
+    window's position within the block so the caller can interpolate
+    timestamps across the parent's span.
+    """
+    tokens = ENCODER.encode(text)
+    if not tokens:
+        return
+
+    step = max(1, window_tokens - overlap_tokens)
+    total = len(tokens)
+    for i in range(0, total, step):
+        window = tokens[i:i + window_tokens]
+        if not window:
+            break
+        end = min(i + window_tokens, total)
+        yield ENCODER.decode(window), i / total, end / total
+        if end >= total:
+            break
+
+
 def build_flat_chunks(doc: dict) -> list[dict]:
     chunks = []
-    for text, start, end in sliding_window_chunks(doc["segments"], FLAT_CHUNK_TOKENS, FLAT_OVERLAP_TOKENS):
+    for i, (text, start, end) in enumerate(
+        sliding_window_chunks(doc["segments"], FLAT_CHUNK_TOKENS, FLAT_OVERLAP_TOKENS)
+    ):
         chunks.append({
-            "id": str(uuid.uuid4()),
+            "id": chunk_uuid(doc["video_id"], "flat", i),
             "video_id": doc["video_id"],
             "title": doc["meta"].get("title", ""),
             "text": text,
@@ -97,9 +147,11 @@ def build_flat_chunks(doc: dict) -> list[dict]:
 def build_parent_document_chunks(doc: dict) -> tuple[list[dict], list[dict]]:
     """Returns (children, parents). Each child has a parent_id pointing into parents."""
     parents = []
-    for text, start, end in sliding_window_chunks(doc["segments"], PARENT_WINDOW_TOKENS, overlap_tokens=0):
+    for i, (text, start, end) in enumerate(
+        sliding_window_chunks(doc["segments"], PARENT_WINDOW_TOKENS, overlap_tokens=0)
+    ):
         parents.append({
-            "id": str(uuid.uuid4()),
+            "id": chunk_uuid(doc["video_id"], "parent", i),
             "video_id": doc["video_id"],
             "title": doc["meta"].get("title", ""),
             "text": text,
@@ -110,15 +162,19 @@ def build_parent_document_chunks(doc: dict) -> tuple[list[dict], list[dict]]:
     children = []
     for parent in parents:
         # re-split the parent window into smaller child chunks for indexing
-        fake_segments = [{"text": parent["text"], "start": parent["start"], "duration": parent["end"] - parent["start"]}]
-        for text, start, end in sliding_window_chunks(fake_segments, CHILD_CHUNK_TOKENS, overlap_tokens=20):
+        span = parent["end"] - parent["start"]
+        for text, frac_start, frac_end in token_window_chunks(
+            parent["text"], CHILD_CHUNK_TOKENS, overlap_tokens=20
+        ):
             children.append({
-                "id": str(uuid.uuid4()),
+                "id": chunk_uuid(doc["video_id"], "child", len(children)),
                 "parent_id": parent["id"],
                 "video_id": doc["video_id"],
                 "text": text,
-                "start": start,
-                "end": end,
+                # interpolated across the parent's span by token position --
+                # the transcript's own timings don't survive the re-split
+                "start": parent["start"] + span * frac_start,
+                "end": parent["start"] + span * frac_end,
             })
     return children, parents
 
@@ -144,7 +200,75 @@ def ensure_qdrant_collections(client: QdrantClient):
             client.create_collection(name, vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE))
 
 
-def run():
+def embed_points(embedder, chunks: list[dict]) -> list[PointStruct]:
+    """Embed a whole chunk list in batches, not one call per chunk."""
+    if not chunks:
+        return []
+    vectors = embedder.encode(
+        [c["text"] for c in chunks],
+        batch_size=EMBED_BATCH_SIZE,
+        show_progress_bar=False,
+    )
+    return [
+        PointStruct(id=c["id"], vector=v.tolist(), payload=c)
+        for c, v in zip(chunks, vectors)
+    ]
+
+
+def already_ingested(cur, video_id: str) -> bool:
+    cur.execute("SELECT 1 FROM flat_chunks WHERE video_id = %s LIMIT 1", (video_id,))
+    return cur.fetchone() is not None
+
+
+def ingest_document(doc: dict, embedder, qdrant: QdrantClient, cur, pg) -> None:
+    """Ingest one episode and commit it.
+
+    Qdrant is written before Postgres, and Postgres is what marks an episode
+    as done. If this dies midway the episode looks un-ingested and is redone
+    on the next run -- which is safe because chunk IDs are deterministic, so
+    the re-run overwrites the same Qdrant points rather than duplicating them.
+    """
+    video_id = doc["video_id"]
+    flat_chunks = build_flat_chunks(doc)
+    children, parents = build_parent_document_chunks(doc)
+
+    flat_points = embed_points(embedder, flat_chunks)
+    child_points = embed_points(embedder, children)
+
+    if flat_points:
+        qdrant.upsert(os.environ.get("QDRANT_COLLECTION_FLAT", "transcripts_flat"), points=flat_points)
+    if child_points:
+        qdrant.upsert(os.environ.get("QDRANT_COLLECTION_CHILD", "transcripts_child"), points=child_points)
+
+    # also store flat chunk text in Postgres for BM25 (tsvector) search
+    for c in flat_chunks:
+        cur.execute(
+            """INSERT INTO flat_chunks (id, video_id, title, text, start_sec, end_sec)
+               VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING""",
+            (c["id"], c["video_id"], c["title"], c["text"], c["start"], c["end"]),
+        )
+
+    for p in parents:
+        cur.execute(
+            """INSERT INTO parents (id, video_id, title, text, start_sec, end_sec)
+               VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING""",
+            (p["id"], p["video_id"], p["title"], p["text"], p["start"], p["end"]),
+        )
+
+    pg.commit()
+    print(f"[ingest] {video_id}: {len(flat_chunks)} flat chunks, "
+          f"{len(children)} child chunks, {len(parents)} parent windows -- committed")
+
+
+def run(force: bool = False):
+    """Ingest every fetched transcript, one episode per transaction.
+
+    force=True (or REINGEST=1) re-ingests episodes already in Postgres --
+    needed after changing the chunking constants, since otherwise the
+    already-ingested check skips them.
+    """
+    force = force or os.environ.get("REINGEST") == "1"
+
     docs = load_raw_transcripts()
     if not docs:
         print("No raw transcripts found -- run `python -m ingestion.fetch_transcripts` first.")
@@ -156,48 +280,21 @@ def run():
     pg = get_pg()
     cur = pg.cursor()
 
-    flat_points, child_points, all_parents = [], [], []
+    done = skipped = 0
+    try:
+        for doc in docs:
+            if not force and already_ingested(cur, doc["video_id"]):
+                print(f"[skip] {doc['video_id']} already ingested")
+                skipped += 1
+                continue
 
-    for doc in docs:
-        flat_chunks = build_flat_chunks(doc)
-        children, parents = build_parent_document_chunks(doc)
-        all_parents.extend(parents)
+            ingest_document(doc, embedder, qdrant, cur, pg)
+            done += 1
+    finally:
+        cur.close()
+        pg.close()
 
-        for c in flat_chunks:
-            vec = embedder.encode(c["text"]).tolist()
-            flat_points.append(PointStruct(id=c["id"], vector=vec, payload=c))
-
-        for c in children:
-            vec = embedder.encode(c["text"]).tolist()
-            child_points.append(PointStruct(id=c["id"], vector=vec, payload=c))
-
-        # also store flat chunk text in Postgres for BM25 (tsvector) search
-        for c in flat_chunks:
-            cur.execute(
-                """INSERT INTO flat_chunks (id, video_id, title, text, start_sec, end_sec)
-                   VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING""",
-                (c["id"], c["video_id"], c["title"], c["text"], c["start"], c["end"]),
-            )
-
-        for p in parents:
-            cur.execute(
-                """INSERT INTO parents (id, video_id, title, text, start_sec, end_sec)
-                   VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING""",
-                (p["id"], p["video_id"], p["title"], p["text"], p["start"], p["end"]),
-            )
-
-        print(f"[ingest] {doc['video_id']}: {len(flat_chunks)} flat chunks, "
-              f"{len(children)} child chunks, {len(parents)} parent windows")
-
-    if flat_points:
-        qdrant.upsert(os.environ.get("QDRANT_COLLECTION_FLAT", "transcripts_flat"), points=flat_points)
-    if child_points:
-        qdrant.upsert(os.environ.get("QDRANT_COLLECTION_CHILD", "transcripts_child"), points=child_points)
-
-    pg.commit()
-    cur.close()
-    pg.close()
-    print("Ingestion complete.")
+    print(f"\nIngestion complete: {done} episode(s) ingested, {skipped} already present.")
 
 
 if __name__ == "__main__":
