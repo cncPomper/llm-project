@@ -1,0 +1,58 @@
+{
+  "title": "Podcast Knowledge Explorer - Monitoring",
+  "timezone": "browser",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Query Volume Over Time",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [{
+        "rawSql": "SELECT date_trunc('hour', created_at) AS time, count(*) AS queries FROM query_log GROUP BY 1 ORDER BY 1",
+        "format": "time_series"
+      }]
+    },
+    {
+      "id": 2,
+      "title": "Feedback Ratio (thumbs up / total)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [{
+        "rawSql": "SELECT date_trunc('day', created_at) AS time, avg(is_positive::int) AS positive_ratio FROM feedback GROUP BY 1 ORDER BY 1",
+        "format": "time_series"
+      }]
+    },
+    {
+      "id": 3,
+      "title": "Average Latency (ms)",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+      "targets": [{
+        "rawSql": "SELECT avg(latency_ms) FROM query_log WHERE created_at > now() - interval '7 days'",
+        "format": "table"
+      }]
+    },
+    {
+      "id": 4,
+      "title": "Top Questions (most recent 50)",
+      "type": "table",
+      "gridPos": {"h": 8, "w": 16, "x": 8, "y": 8},
+      "targets": [{
+        "rawSql": "SELECT question, num_sources, latency_ms, created_at FROM query_log ORDER BY created_at DESC LIMIT 50",
+        "format": "table"
+      }]
+    },
+    {
+      "id": 5,
+      "title": "Negative Feedback Count (last 7 days)",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
+      "targets": [{
+        "rawSql": "SELECT count(*) FROM feedback WHERE is_positive = false AND created_at > now() - interval '7 days'",
+        "format": "table"
+      }]
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

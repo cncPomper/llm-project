@@ -1,0 +1,18 @@
+# List of episodes to ingest.
+# video_id is the YouTube video ID (the part after ?v= in the URL).
+# Add/remove entries freely -- this is the reproducible source of truth
+# for what's in the knowledge base.
+
+episodes:
+  - video_id: "REPLACE_ME_1"
+    title: "Huberman Lab - Example Episode 1"
+    channel: "Huberman Lab"
+  - video_id: "REPLACE_ME_2"
+    title: "Lex Fridman Podcast - Example Episode 2"
+    channel: "Lex Fridman"
+  - video_id: "REPLACE_ME_3"
+    title: "Huberman Lab - Example Episode 3"
+    channel: "Huberman Lab"
+
+# Tip: start with 5-10 episodes for fast iteration, then scale up once
+# the pipeline and eval numbers look good.
