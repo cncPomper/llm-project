@@ -1,18 +1,36 @@
 # List of episodes to ingest.
-# video_id is the YouTube video ID (the part after ?v= in the URL).
+#
+# video_id is the 11-character YouTube video ID ONLY -- the part after ?v=
+# in the URL, not the whole URL. For
+#   https://www.youtube.com/watch?v=n_qKxNcMvtM
+# the video_id is
+#   n_qKxNcMvtM
+#
+# It is used both to fetch the transcript and to build the "jump to moment"
+# deep links, so a full URL here breaks both.
+#
 # Add/remove entries freely -- this is the reproducible source of truth
 # for what's in the knowledge base.
 
 episodes:
-  - video_id: "REPLACE_ME_1"
-    title: "Huberman Lab - Example Episode 1"
-    channel: "Huberman Lab"
-  - video_id: "REPLACE_ME_2"
-    title: "Lex Fridman Podcast - Example Episode 2"
-    channel: "Lex Fridman"
-  - video_id: "REPLACE_ME_3"
-    title: "Huberman Lab - Example Episode 3"
-    channel: "Huberman Lab"
+  - video_id: "n_qKxNcMvtM"
+    title: "Raising a Dog & Mastering Calm Assertive Energy | Cesar Millan"
+    channel: "Andrew Huberman"
+  - video_id: "bz5Hjk40FD4"
+    title: "Elon Musk on DOGE, AI, & Are we in a Simulation? | KMP Ep.18"
+    channel: "Katie Miller Pod"
+  - video_id: "atejm2w2jWY"
+    title: "A Shaolin master warns: A hidden epidemic is growing rapidly and killing millions of people!"
+    channel: "The Diary of A CEO"
+  - video_id: "knmyUE4CnuY"
+    title: "Shaolin Warrior: Suffering Has A Pattern—Do THIS to Break The Cycle"
+    channel: "Jack Neel"
+  - video_id: "gv8YCZ5Wz9M"
+    title: "Cannibalism, Drinking Blood, and Raw Meat - Oscarvore"
+    channel: "Jack Neel"
+  - video_id: "cWZI2RyI9wM"
+    title: "How to Build a Life That Matters & Get What You Want Starting Today"
+    channel: "Mel Robbins"
 
 # Tip: start with 5-10 episodes for fast iteration, then scale up once
 # the pipeline and eval numbers look good.

@@ -9,7 +9,11 @@ readme = "README.md"
 requires-python = ">=3.11,<3.12"
 
 dependencies = [
-    "youtube-transcript-api==0.6.2",
+    # Deliberately NOT held at the 2024 cap below: YouTube changed its
+    # transcript endpoint, and 0.6.2 now gets an empty response body for
+    # every video, failing with "ParseError: no element found". 1.x is the
+    # only version that can fetch anything at all.
+    "youtube-transcript-api==1.2.4",
     "faster-whisper==1.0.3",
     "prefect==2.19.9",
     "qdrant-client==1.9.1",
@@ -40,3 +44,7 @@ dependencies = [
 # Only affects `uv lock`; uv.lock is committed, so installs are reproducible
 # regardless. Raise this date only alongside upgrading the pins above.
 exclude-newer = "2024-08-15T00:00:00Z"
+
+# youtube-transcript-api is exempt: it talks to a live third-party endpoint
+# that has since changed, so it must track upstream rather than the cap.
+exclude-newer-package = { youtube-transcript-api = "2026-08-16T00:00:00Z" }

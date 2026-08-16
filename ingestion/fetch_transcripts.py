@@ -13,13 +13,50 @@ a HuggingFace token and a GPU for reasonable speed.
 """
 import json
 import os
+import re
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import yaml
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 
 RAW_DIR = Path(__file__).parent.parent / "data" / "raw_transcripts"
 RAW_DIR.mkdir(parents=True, exist_ok=True)
+
+_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+_YOUTUBE_HOSTS = {
+    "youtube.com", "www.youtube.com", "m.youtube.com",
+    "music.youtube.com", "youtu.be", "www.youtu.be",
+}
+
+
+def normalize_video_id(value: str) -> str:
+    """Accept either a bare 11-character video ID or any common YouTube URL.
+
+    Worth normalizing rather than just documenting: video_id isn't only used
+    to fetch the transcript, it's substituted straight into build_deeplink().
+    A URL slipping through would yield `watch?v=https://youtube.com/...` on
+    every source card -- i.e. a broken "jump to moment" link everywhere.
+    """
+    value = value.strip()
+    if _VIDEO_ID_RE.match(value):
+        return value
+
+    parsed = urlparse(value if "//" in value else f"https://{value}")
+    host = parsed.netloc.lower()
+    if host not in _YOUTUBE_HOSTS:
+        raise ValueError(f"Not a recognised YouTube video ID or URL: {value!r}")
+
+    if host.endswith("youtu.be"):
+        candidate = parsed.path.lstrip("/").split("/")[0]
+    elif parsed.path.startswith(("/shorts/", "/embed/", "/live/", "/v/")):
+        candidate = parsed.path.split("/")[2]
+    else:
+        candidate = (parse_qs(parsed.query).get("v") or [""])[0]
+
+    if not _VIDEO_ID_RE.match(candidate):
+        raise ValueError(f"Could not extract a YouTube video ID from {value!r}")
+    return candidate
 
 
 def load_episode_list(path: str = "episodes.yaml") -> list[dict]:
@@ -28,9 +65,16 @@ def load_episode_list(path: str = "episodes.yaml") -> list[dict]:
 
 
 def fetch_transcript(video_id: str) -> list[dict]:
-    """Returns a list of {text, start, duration} segments, in seconds."""
+    """Returns a list of {text, start, duration} segments, in seconds.
+
+    youtube-transcript-api 1.x replaced the old static
+    `YouTubeTranscriptApi.get_transcript(...)` with an instance `.fetch(...)`
+    returning a FetchedTranscript. `.to_raw_data()` converts it back to the
+    plain list-of-dicts shape the chunking step already expects, so nothing
+    downstream had to change.
+    """
     try:
-        return YouTubeTranscriptApi.get_transcript(video_id)
+        return YouTubeTranscriptApi().fetch(video_id).to_raw_data()
     except (TranscriptsDisabled, NoTranscriptFound):
         return []
 
