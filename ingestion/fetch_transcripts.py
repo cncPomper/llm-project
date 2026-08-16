@@ -177,6 +177,19 @@ def main():
     on_disk = len(list(RAW_DIR.glob("*.json")))
     print(f"\n[fetch] {fetched} newly fetched; {on_disk}/{len(episodes)} episodes now on disk.")
 
+    # Fail loudly when there is nothing at all to ingest. A partial fetch is
+    # fine -- the next run resumes -- but a run that produced no corpus must
+    # not report success, or a scheduled pipeline reports green while doing
+    # nothing at all.
+    if on_disk == 0:
+        raise RuntimeError(
+            "No transcripts could be fetched, so there is nothing to ingest. "
+            "If this was an IP block, wait for it to lapse and re-run, raise "
+            "FETCH_DELAY_SECONDS, or configure a proxy (see .env.example)."
+        )
+
+    return on_disk
+
 
 if __name__ == "__main__":
     main()

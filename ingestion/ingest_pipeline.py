@@ -147,7 +147,7 @@ def ensure_qdrant_collections(client: QdrantClient):
 def run():
     docs = load_raw_transcripts()
     if not docs:
-        print("No raw transcripts found -- run ingestion/fetch_transcripts.py first.")
+        print("No raw transcripts found -- run `python -m ingestion.fetch_transcripts` first.")
         return
 
     embedder = SentenceTransformer(EMBED_MODEL_NAME)
