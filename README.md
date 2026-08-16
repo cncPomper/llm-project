@@ -143,14 +143,64 @@ contains a dashboard JSON with 5 charts:
 `docker-compose.yml` runs everything: `app` (Streamlit), `qdrant`,
 `postgres`, `grafana`. `Dockerfile` builds the app image.
 
+### Quickstart
+
+**Step 0 — put real episodes in `episodes.yaml`.** It ships with
+`REPLACE_ME_*` placeholders; until they're replaced with real YouTube video
+IDs there is nothing to ingest and the app has nothing to answer from.
+
 ```bash
-cp .env.example .env   # fill in OPENAI_API_KEY etc.
-docker compose up --build
+cp .env.example .env    # fill in OPENAI_API_KEY
+```
+
+**1. Start the infrastructure.** `monitoring/schema.sql` runs automatically
+on Postgres's first boot.
+
+```bash
+docker compose up --build -d qdrant postgres grafana
+```
+
+**2. Ingest.** Run from the **repo root** — `episodes.yaml` is resolved
+relative to the working directory. Use `python -m ...` rather than
+`python path/to/script.py`: running a script by path puts *its own*
+directory on `sys.path` instead of the repo root, so the `ingestion.` /
+`rag.` / `eval.` package imports won't resolve.
+
+The `.env` hostnames (`postgres`, `qdrant`) only resolve inside the Compose
+network, so override them for host-side runs:
+
+```bash
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+
+export POSTGRES_HOST=localhost QDRANT_URL=http://localhost:6333
+# Windows PowerShell:
+#   $env:POSTGRES_HOST="localhost"; $env:QDRANT_URL="http://localhost:6333"
+
+python -m ingestion.flow      # fetch -> chunk -> embed -> load (Prefect)
+```
+
+**3. Evaluate** (same shell, same env overrides — costs OpenAI tokens):
+
+```bash
+python -m eval.generate_ground_truth
+python -m eval.retrieval_eval
+python -m eval.llm_eval
+```
+
+**4. Start the app:**
+
+```bash
+docker compose up --build -d app
 ```
 
 - App: http://localhost:8501
 - Grafana: http://localhost:3000 (default admin/admin)
 - Qdrant dashboard: http://localhost:6333/dashboard
+
+Grafana isn't provisioned automatically: add Postgres as a datasource
+(host `postgres:5432`, matching your `.env` credentials), then import
+`monitoring/grafana/dashboard.json`.
 
 ## 10. Reproducibility
 
