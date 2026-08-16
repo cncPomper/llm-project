@@ -7,9 +7,11 @@ LLM-as-judge rubric:
   C. rewrite_rerank_rag     -- rewrite_query(question) -> retrieve w/ hybrid_rerank -> generate
 
 Judge scores each answer 1-5 on: faithfulness (grounded in excerpts, no
-hallucinated timestamps/numbers), relevance, and specificity. Run:
+hallucinated timestamps/numbers), relevance, and specificity.
 
-  python eval/llm_eval.py
+Run from the repo root:
+
+  python -m eval.llm_eval
 """
 import json
 import os
