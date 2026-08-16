@@ -33,6 +33,15 @@ RAW_DIR.mkdir(parents=True, exist_ok=True)
 # Seconds to wait between fetches. YouTube rate-limits bursts from one IP.
 FETCH_DELAY_SECONDS = float(os.environ.get("FETCH_DELAY_SECONDS", "3"))
 
+
+class TranscriptsUnavailable(RuntimeError):
+    """No transcripts could be fetched, so there is nothing to ingest.
+
+    Its own type so the flow can report it as a plain one-line failure --
+    it's an expected, actionable condition, not a crash. Anything else still
+    propagates with a full traceback.
+    """
+
 _VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _YOUTUBE_HOSTS = {
     "youtube.com", "www.youtube.com", "m.youtube.com",
@@ -182,7 +191,7 @@ def main():
     # not report success, or a scheduled pipeline reports green while doing
     # nothing at all.
     if on_disk == 0:
-        raise RuntimeError(
+        raise TranscriptsUnavailable(
             "No transcripts could be fetched, so there is nothing to ingest. "
             "If this was an IP block, wait for it to lapse and re-run, raise "
             "FETCH_DELAY_SECONDS, or configure a proxy (see .env.example)."
