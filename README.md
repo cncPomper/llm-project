@@ -100,10 +100,20 @@ questions with known source chunk/timestamp) and reports **Hit Rate** and
 | Hybrid (vector + BM25) | Both of the above combined with keyword search, reciprocal rank fusion |
 | + Rerank | Cross-encoder rerank of the fused top-K before passing to the LLM |
 
-The default is `RETRIEVAL_STRATEGY=hybrid_rerank`, configurable via `.env`
-and switchable per query in the app's sidebar. **This is currently an
-assumption, not a measured result** — `eval/results.md` has yet to be
-populated, so the default should be revisited once it is.
+Measured over 100 synthetic questions (`eval/results.md`):
+
+| Strategy | Hit Rate@5 | MRR@5 |
+|---|---|---|
+| flat | 0.84 | 0.697 |
+| parent_document | 0.90 | 0.791 |
+| hybrid | 0.89 | 0.752 |
+| **hybrid_rerank** | **0.92** | **0.862** |
+
+`hybrid_rerank` wins on both metrics and is the default
+(`RETRIEVAL_STRATEGY` in `.env`, switchable per query in the app sidebar).
+The rerank is what separates it from plain `hybrid` — same candidates, but
+MRR climbs from 0.752 to 0.862, i.e. the right chunk moves up the list
+rather than merely appearing in it.
 
 ## 5. LLM Answer Evaluation
 
@@ -115,7 +125,26 @@ populated, so the default should be revisited once it is.
 3. RAG + query rewriting + rerank
 
 using an LLM-as-judge rubric (faithfulness to transcript, relevance,
-specificity) over a held-out question set. Results in `eval/results.md`.
+specificity), scored 1–5 over 30 questions:
+
+| Strategy | Faithfulness | Relevance | Specificity |
+|---|---|---|---|
+| **plain_rag** | **4.67** | **4.83** | **3.97** |
+| rewrite_rag | 3.73 | 3.87 | 3.07 |
+| rewrite_rerank_rag | 4.23 | 4.23 | 3.57 |
+
+**Query rewriting scored worse on every dimension**, which is worth reading
+carefully rather than taking at face value. `generate_ground_truth.py`
+produces questions *from* a chunk, so they are already keyword-rich and
+specific — exactly the shape rewriting is meant to produce. Rewriting an
+already-optimal query can only blur it, and the reranked variant recovers
+about half the loss. The eval set contains none of the vague, conversational
+questions rewriting exists to fix, so the honest conclusion is "rewriting
+does not help well-formed questions", not "rewriting is useless". Rewriting
+stays available as a sidebar toggle for that reason.
+
+A more representative benchmark would need hand-written questions phrased
+the way a listener actually asks them.
 
 ## 6. Interface
 
@@ -325,11 +354,13 @@ podcast-explorer/
 - [x] Pick final episode list in `episodes.yaml` — 6 episodes, ~12 h of audio
 - [x] Run ingestion end-to-end and populate Qdrant + Postgres — 562 flat
       chunks, 241 parent windows, 1900 child vectors
-- [ ] Finish the ground-truth set (`eval/ground_truth.jsonl` currently holds
-      78 of the sampled 100 — the last run was interrupted) and fill in
-      `eval/results.md`, which is still a placeholder
-- [ ] Choose `RETRIEVAL_STRATEGY` from the eval numbers rather than the
-      current default guess of `hybrid_rerank`
+- [x] Generate the ground-truth set (100 questions) and run both evaluations
+      — results in `eval/results.md`
+- [x] Confirm `RETRIEVAL_STRATEGY=hybrid_rerank` against the numbers
+      (best on both Hit Rate and MRR)
+- [ ] Re-run the LLM eval against hand-written, conversational questions —
+      the synthetic set is biased toward already-well-formed queries, which
+      is why query rewriting scores badly on it
 - [ ] Record a short Streamlit screen-capture demo and embed it here
 - [ ] Add screenshots of the Grafana dashboard
 
