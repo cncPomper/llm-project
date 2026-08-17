@@ -117,7 +117,11 @@ with st.sidebar:
     )
     use_rewrite = st.checkbox("Rewrite query before retrieval", value=True)
 
-question = st.chat_input("e.g. What protocol does he recommend for morning sunlight?")
+# Keep this answerable from the ingested episodes. The previous example asked
+# about morning sunlight protocols, which nothing in the corpus covers, so it
+# steered first-time users straight into a "the excerpts do not contain..."
+# refusal on their opening question.
+question = st.chat_input("e.g. What does Cesar Millan mean by calm assertive energy?")
 
 if question:
     with st.spinner("Searching transcripts..."):
