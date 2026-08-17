@@ -7,11 +7,19 @@ Streamlit chat UI.
 - 👍/👎 feedback per answer, logged to Postgres for the monitoring
   dashboard.
 
-Note on structure: every turn is rendered from `st.session_state.history`,
-including the one just answered. A button click triggers a rerun in which
+Note on structure: every *settled* turn is rendered from
+`st.session_state.history`. A button click triggers a rerun in which
 `st.chat_input` returns None, so anything rendered inside an `if question:`
 block would vanish before the click could be handled -- which is why the
 feedback buttons live in the history loop with `on_click` callbacks.
+
+The history loop runs *before* the `if question:` block, and the in-flight
+question is echoed by hand. Streamlit paints the page top to bottom as the
+script runs, so with the loop placed after the blocking retrieve/generate
+call the user stares at a bare spinner for the whole wait -- their own
+question missing, earlier turns gone -- until the answer lands. Answering
+ends with `st.rerun()`, which redraws that turn from history with its
+sources and feedback buttons attached.
 """
 import os
 import time
@@ -123,8 +131,23 @@ with st.sidebar:
 # refusal on their opening question.
 question = st.chat_input("e.g. What does Cesar Millan mean by calm assertive energy?")
 
+for idx, turn in enumerate(st.session_state.history):
+    with st.chat_message("user"):
+        st.write(turn["question"])
+    with st.chat_message("assistant"):
+        st.write(turn["answer"])
+        render_sources(turn["sources"])
+        if turn.get("log_error"):
+            st.caption(f"(monitoring log skipped: {turn['log_error']})")
+        render_feedback(idx, turn)
+
 if question:
-    with st.spinner("Searching transcripts..."):
+    # Echo the question and put the spinner where the answer will appear, so
+    # the wait reads as a conversation in progress rather than a blank page.
+    with st.chat_message("user"):
+        st.write(question)
+
+    with st.chat_message("assistant"), st.spinner("Searching transcripts..."):
         start = time.time()
         search_query = rewrite_query(question) if use_rewrite else question
         sources = retrieve(search_query, strategy=strategy)
@@ -146,13 +169,6 @@ if question:
         turn["log_error"] = str(e)
 
     st.session_state.history.append(turn)
-
-for idx, turn in enumerate(st.session_state.history):
-    with st.chat_message("user"):
-        st.write(turn["question"])
-    with st.chat_message("assistant"):
-        st.write(turn["answer"])
-        render_sources(turn["sources"])
-        if turn.get("log_error"):
-            st.caption(f"(monitoring log skipped: {turn['log_error']})")
-        render_feedback(idx, turn)
+    # The echo above drew the question and an empty assistant bubble; only the
+    # history loop knows how to draw the answer, sources and feedback buttons.
+    st.rerun()
