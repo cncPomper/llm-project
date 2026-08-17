@@ -219,7 +219,36 @@ transcribing ~12 hours of audio takes hours:
   the summary, and retried on the next run.
 
 Set `REINGEST=1` to force re-ingestion after changing the chunking constants,
-which the already-ingested check would otherwise skip.
+which the already-ingested check would otherwise skip. A forced re-ingest
+purges the episode from both stores first — deterministic ids alone would
+leave stale Postgres text and orphaned chunks behind.
+
+### Sponsor reads are stripped at ingestion
+
+Ad reads are transcribed like any other speech, so without filtering they get
+chunked, embedded and returned as retrieval hits — a question about Shaolin
+discipline used to surface a LinkedIn hiring pitch, and each such hit costs a
+top-K slot that real content could have used.
+
+`ingestion/ad_filter.py` removes them from the raw segments before chunking,
+so both indexes see the same corpus. Detection is deliberately conservative:
+a strong marker (`our sponsor`, `use code`, `40% off`) opens a span, which is
+then held open by **repetition of the advertiser's name** — the body of a read
+is ordinary prose ("AG1 is designed to support gut health"), so marker density
+alone loses the thread after a few seconds, while the product name recurs in
+nearly every sentence. That is also what catches chained reads running one
+advertiser straight into the next.
+
+Two tempting markers were tested against the corpus and rejected:
+`terms and conditions` matched only a genuine discussion of scam checkout
+terms, and bare `sponsor` matches disclosures and outros rather than reads.
+
+```bash
+uv run python -m ingestion.ad_filter   # dry run: what would be stripped
+```
+
+Measured on this corpus: 4.1% of the Huberman episode (three ad blocks of
+1.6–2.6 min) and under 0.5% of the others. `STRIP_ADS=0` disables it.
 
 ## 8. Monitoring
 
@@ -410,8 +439,7 @@ podcast-explorer/
 - [ ] Attack specificity, the weakest judged dimension on both question sets
       — answers are faithful but general, which points at retrieval
       granularity rather than prompting
-- [ ] Strip sponsor reads at ingestion; they are indexed as ordinary content
-      and surface as retrieval hits
+- [x] Strip sponsor reads at ingestion (`ingestion/ad_filter.py`)
 - [ ] Collect real user feedback — the votes currently in `query_log` were
       generated from an automated quality judgment, not human clicks
 

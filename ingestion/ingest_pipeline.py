@@ -29,8 +29,13 @@ import psycopg2
 import tiktoken
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
+from qdrant_client.models import (
+    Distance, VectorParams, PointStruct,
+    Filter, FieldCondition, MatchValue, FilterSelector,
+)
 from sentence_transformers import SentenceTransformer
+
+from ingestion.ad_filter import strip_ads, strip_ads_enabled
 
 load_dotenv()
 
@@ -215,6 +220,29 @@ def embed_points(embedder, chunks: list[dict]) -> list[PointStruct]:
     ]
 
 
+def purge_document(video_id: str, qdrant: QdrantClient, cur) -> None:
+    """Remove every trace of an episode from both stores before re-ingesting.
+
+    Needed because a re-run is not otherwise idempotent in the way it looks:
+    the Postgres inserts are ON CONFLICT DO NOTHING, so an existing row keeps
+    its OLD text while Qdrant's upsert replaces the vector -- leaving the two
+    stores describing different chunks under the same id. And anything that
+    changes how many chunks an episode yields (new chunking constants, or
+    stripping sponsor reads) leaves the surplus tail of the previous run
+    behind as orphans, since deterministic ids only overwrite index-for-index.
+    """
+    for collection in [os.environ.get("QDRANT_COLLECTION_FLAT", "transcripts_flat"),
+                       os.environ.get("QDRANT_COLLECTION_CHILD", "transcripts_child")]:
+        qdrant.delete(
+            collection_name=collection,
+            points_selector=FilterSelector(filter=Filter(must=[
+                FieldCondition(key="video_id", match=MatchValue(value=video_id))
+            ])),
+        )
+    cur.execute("DELETE FROM flat_chunks WHERE video_id = %s", (video_id,))
+    cur.execute("DELETE FROM parents WHERE video_id = %s", (video_id,))
+
+
 def already_ingested(cur, video_id: str) -> bool:
     cur.execute("SELECT 1 FROM flat_chunks WHERE video_id = %s LIMIT 1", (video_id,))
     return cur.fetchone() is not None
@@ -229,6 +257,19 @@ def ingest_document(doc: dict, embedder, qdrant: QdrantClient, cur, pg) -> None:
     the re-run overwrites the same Qdrant points rather than duplicating them.
     """
     video_id = doc["video_id"]
+
+    # Strip sponsor reads before chunking, not after: this is the one point
+    # that feeds both indexes, so filtering here keeps the flat and
+    # parent-document views of the corpus identical. Timestamps are untouched,
+    # so deep links built from surviving segments still land correctly.
+    if strip_ads_enabled():
+        kept, removed = strip_ads(doc["segments"])
+        if removed:
+            ad_seconds = sum(s.get("duration", 0.0) for s in removed)
+            print(f"[ads] {video_id}: dropped {len(removed)} segments "
+                  f"({ad_seconds / 60:.1f} min) of sponsor reads")
+            doc = {**doc, "segments": kept}
+
     flat_chunks = build_flat_chunks(doc)
     children, parents = build_parent_document_chunks(doc)
 
@@ -287,6 +328,9 @@ def run(force: bool = False):
                 print(f"[skip] {doc['video_id']} already ingested")
                 skipped += 1
                 continue
+
+            if force and already_ingested(cur, doc["video_id"]):
+                purge_document(doc["video_id"], qdrant, cur)
 
             ingest_document(doc, embedder, qdrant, cur, pg)
             done += 1
