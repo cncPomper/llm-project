@@ -19,3 +19,11 @@ Results will appear below as they're generated.
 | parent_document | 0.9 | 0.791 | 100 |
 | hybrid | 0.89 | 0.752 | 100 |
 | hybrid_rerank | 0.92 | 0.862 | 100 |
+
+## LLM Answer Evaluation
+
+| Strategy | Faithfulness | Relevance | Specificity | N |
+|---|---|---|---|---|
+| plain_rag | 4.67 | 4.83 | 3.97 | 30 |
+| rewrite_rag | 3.73 | 3.87 | 3.07 | 30 |
+| rewrite_rerank_rag | 4.23 | 4.23 | 3.57 | 30 |
