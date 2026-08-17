@@ -36,11 +36,14 @@ This project builds a **RAG + light agent** application that:
 
 - **YouTube Transcript API** (`youtube-transcript-api`) for auto-generated
   or creator-uploaded captions — includes per-line start times.
-- Optional fallback: **Whisper** transcription (`faster-whisper`) for
-  episodes without captions, which can also produce **speaker diarization**
-  when combined with `pyannote-audio`.
-- A curated `episodes.yaml` file lists the video IDs to ingest (starter list
-  included — swap in whichever channel/episodes you like).
+- **Local transcription fallback** (`yt-dlp` + `faster-whisper`), enabled
+  with `WHISPER_FALLBACK=1`. It covers episodes without captions and — the
+  case that actually matters in practice — YouTube blocking the caption
+  endpoint for your IP. See [Troubleshooting](#15-troubleshooting-youtube-blocks).
+  Speaker diarization via `pyannote-audio` can be layered on top of the
+  Whisper segments, but is not wired in (needs a HuggingFace token and a GPU).
+- A curated `episodes.yaml` file lists the video IDs to ingest — six
+  long-form episodes (~12 hours of audio) across five channels.
 
 > This is a different corpus from the DTC Zoomcamp FAQ dataset used in
 > course modules, per the project rules.
@@ -52,7 +55,10 @@ YouTube video IDs (episodes.yaml)
         │
         ▼
 ingestion/fetch_transcripts.py   ── pulls raw transcript + timestamps
-        │
+        │                            ├─ captions via youtube-transcript-api
+        │                            └─ if blocked/absent and WHISPER_FALLBACK=1:
+        │                               yt-dlp audio → faster-whisper
+        │                               (same {text, start, duration} shape)
         ▼
 ingestion/ingest_pipeline.py     ── chunks two ways:
         │                              1. flat: fixed-size sliding window
@@ -94,8 +100,10 @@ questions with known source chunk/timestamp) and reports **Hit Rate** and
 | Hybrid (vector + BM25) | Both of the above combined with keyword search, reciprocal rank fusion |
 | + Rerank | Cross-encoder rerank of the fused top-K before passing to the LLM |
 
-The best-performing combination (tracked in `eval/results.md`) is what the
-app uses by default — configurable via `.env` (`RETRIEVAL_STRATEGY=`).
+The default is `RETRIEVAL_STRATEGY=hybrid_rerank`, configurable via `.env`
+and switchable per query in the app's sidebar. **This is currently an
+assumption, not a measured result** — `eval/results.md` has yet to be
+populated, so the default should be revisited once it is.
 
 ## 5. LLM Answer Evaluation
 
@@ -106,9 +114,8 @@ app uses by default — configurable via `.env` (`RETRIEVAL_STRATEGY=`).
    retrieval-friendly queries before search)
 3. RAG + query rewriting + rerank
 
-using an LLM-as-judge rubric (faithfulness to transcript, timestamp
-accuracy, relevance) over a held-out question set. Results in
-`eval/results.md`.
+using an LLM-as-judge rubric (faithfulness to transcript, relevance,
+specificity) over a held-out question set. Results in `eval/results.md`.
 
 ## 6. Interface
 
@@ -125,6 +132,22 @@ Streamlit chat app (`app/streamlit_app.py`):
 `ingestion/ingest_pipeline.py` is a script orchestrated by **Prefect**
 (`ingestion/flow.py`) so it's a repeatable, automated pipeline rather than
 a one-off notebook: fetch → chunk (both strategies) → embed → load.
+
+It is built to survive a long run being interrupted, which matters because
+transcribing ~12 hours of audio takes hours:
+
+- **Already-fetched episodes are skipped** (a transcript JSON on disk) and
+  **already-ingested ones too** (a row in Postgres), so re-running resumes
+  rather than redoing.
+- **Chunk IDs are deterministic** (`uuid5` of video/kind/position), so a
+  re-ingest overwrites its own Qdrant points instead of duplicating them.
+- **Downloaded audio is reused** after an interruption — a killed run does
+  not re-download ~300 MB it already has.
+- **One episode failing does not kill the run**; it is skipped, reported in
+  the summary, and retried on the next run.
+
+Set `REINGEST=1` to force re-ingestion after changing the chunking constants,
+which the already-ingested check would otherwise skip.
 
 ## 8. Monitoring
 
@@ -146,9 +169,14 @@ contains a provisioned dashboard with 6 panels:
 
 ### Quickstart
 
-**Step 0 — put real episodes in `episodes.yaml`.** It ships with
-`REPLACE_ME_*` placeholders; until they're replaced with real YouTube video
-IDs there is nothing to ingest and the app has nothing to answer from.
+**Prerequisites:** [uv](https://docs.astral.sh/uv/), Docker, and — if you
+will use the Whisper fallback — **ffmpeg on PATH** (used to extract audio to
+16 kHz mono) and optionally **Node** or **Deno** (yt-dlp needs a JavaScript
+runtime to decipher YouTube signatures; without one some downloads fail with
+`HTTP Error 403`).
+
+`episodes.yaml` already lists six real episodes, so you can run this as-is;
+edit it to point at whichever channel or episodes you prefer.
 
 ```bash
 cp .env.example .env    # fill in OPENAI_API_KEY
@@ -167,22 +195,31 @@ relative to the working directory. Use `python -m ...` rather than
 directory on `sys.path` instead of the repo root, so the `ingestion.` /
 `rag.` / `eval.` package imports won't resolve.
 
-The `.env` hostnames (`postgres`, `qdrant`) only resolve inside the Compose
-network, so override them for host-side runs:
+`POSTGRES_HOST` / `QDRANT_URL` must point at `localhost` for host-side runs —
+the Compose service names (`postgres`, `qdrant`) only resolve inside the
+Compose network. `.env.example` ships the Compose values because the app
+container reads that file; set them to `localhost` in your own `.env`, or
+override per shell. This does not affect the container, which gets both from
+the `environment:` block in `docker-compose.yml`.
 
 ```bash
 uv sync                       # creates .venv from uv.lock, exactly pinned
-
-export POSTGRES_HOST=localhost QDRANT_URL=http://localhost:6333
-# Windows PowerShell:
-#   $env:POSTGRES_HOST="localhost"; $env:QDRANT_URL="http://localhost:6333"
 
 uv run python -m ingestion.flow    # fetch -> chunk -> embed -> load (Prefect)
 ```
 
 `uv run` executes inside the project venv, so there is no activate step.
 
-**3. Evaluate** (same shell, same env overrides — costs OpenAI tokens):
+If the caption endpoint is blocked for your IP, set `WHISPER_FALLBACK=1`
+first — otherwise the run stops with nothing fetched. Transcribing all six
+episodes takes a few hours; the log reports progress once a minute, and
+`-u` keeps it streaming when you redirect it:
+
+```bash
+uv run python -u -m ingestion.flow 2>&1 | tee ingest.log
+```
+
+**3. Evaluate** (costs OpenAI tokens):
 
 ```bash
 uv run python -m eval.generate_ground_truth
@@ -214,6 +251,13 @@ manual datasource setup or dashboard import: the dashboard is under the
   exact environment. The container installs from the same lock via
   `uv sync --frozen`, which fails rather than silently re-resolving if the
   lock and `pyproject.toml` drift apart.
+- Pins are resolved as of `exclude-newer = 2024-08-15`, contemporaneous with
+  the direct pins, because several declare loose bounds and break when paired
+  with 2026 transitive packages. Two exceptions are exempted via
+  `exclude-newer-package`: `youtube-transcript-api` and `yt-dlp` both talk to
+  live YouTube endpoints that have since changed, so they must track upstream.
+  `yt-dlp` especially needs re-locking whenever YouTube breaks extraction.
+- ffmpeg is an external, unpinned dependency of the Whisper fallback.
 - Python is pinned to 3.11 (`.python-version`), matching the container.
 - `episodes.yaml` lists the exact video IDs used — transcripts are fetched
   live via the YouTube API so no large data files need to be committed.
@@ -245,6 +289,7 @@ manual datasource setup or dashboard import: the dashboard is under the
 ```
 podcast-explorer/
 ├── README.md
+├── CLAUDE.md                 # repo guidance for Claude Code
 ├── docker-compose.yml
 ├── Dockerfile
 ├── pyproject.toml
@@ -266,6 +311,9 @@ podcast-explorer/
 │   └── results.md
 ├── app/
 │   └── streamlit_app.py
+├── data/                     # gitignored
+│   ├── raw_transcripts/      # fetched transcripts (JSON)
+│   └── audio/                # Whisper intermediates, deleted after use
 └── monitoring/
     ├── schema.sql
     └── grafana/
@@ -274,8 +322,55 @@ podcast-explorer/
 
 ## 14. Next Steps / TODO
 
-- [ ] Pick final episode list in `episodes.yaml`
-- [ ] Run ingestion end-to-end and populate Qdrant + Postgres
-- [ ] Generate ground-truth eval set and fill in `eval/results.md`
+- [x] Pick final episode list in `episodes.yaml` — 6 episodes, ~12 h of audio
+- [x] Run ingestion end-to-end and populate Qdrant + Postgres — 562 flat
+      chunks, 241 parent windows, 1900 child vectors
+- [ ] Finish the ground-truth set (`eval/ground_truth.jsonl` currently holds
+      78 of the sampled 100 — the last run was interrupted) and fill in
+      `eval/results.md`, which is still a placeholder
+- [ ] Choose `RETRIEVAL_STRATEGY` from the eval numbers rather than the
+      current default guess of `hybrid_rerank`
 - [ ] Record a short Streamlit screen-capture demo and embed it here
 - [ ] Add screenshots of the Grafana dashboard
+
+Known limitation: sponsor reads are indexed as ordinary transcript content,
+so ad copy can surface as a retrieval hit and will depress eval scores.
+
+## 15. Troubleshooting: YouTube blocks
+
+Transcript fetching and audio download are two different endpoints with
+independent failure modes. Both are expected conditions the pipeline handles
+rather than crashes.
+
+**`IpBlocked` / `RequestBlocked` on every video.** YouTube is returning 429
+on `/api/timedtext` for your IP. The watch page and audio downloads keep
+working — only captions are blocked, so this does not mean you are offline
+or banned. Raising `FETCH_DELAY_SECONDS` does not help if the 429 lands on
+the first request of a run, since the limit predates the run. Options, in
+order of reliability:
+
+1. `WHISPER_FALLBACK=1` — transcribe locally, independent of IP reputation.
+2. A **residential** proxy (`WEBSHARE_PROXY_USERNAME` / `_PASSWORD`, or
+   `PROXY_HTTP_URL`). Datacenter proxies do not work: YouTube blocks those
+   ranges wholesale, so the exit IP 429s exactly like your own. Check what
+   you are actually getting before paying — a rotating residential pool
+   returns a different IP per request.
+3. Wait for the block to lapse (minutes to hours for a home IP).
+
+**`HTTP Error 403: Forbidden` from yt-dlp.** Two distinct causes:
+
+- *No JavaScript runtime.* yt-dlp enables only `deno` by default; install
+  Deno or Node so signatures can be deciphered. `download_audio()` enables
+  whichever of deno/node/bun it finds.
+- *The "n challenge".* High-bitrate audio is gated behind a challenge that
+  needs a solver script yt-dlp fetches at runtime. Rather than enabling
+  `--remote-components ejs`, which downloads and executes remote code, the
+  pipeline falls back to the lowest-bitrate stream — which is ungated, and
+  costs nothing here since audio is downmixed to 16 kHz mono for Whisper.
+
+**Whisper is slow.** `WHISPER_MODEL` defaults to `base`. Measured on 16 CPU
+cores: `tiny` ~2.7x realtime (noticeably worse wording), `base` ~1.6–7x
+depending on load, `small` ~0.7x — i.e. `small` takes longer than the episode
+itself. On Windows, `KMP_DUPLICATE_LIB_OK` is set before importing
+faster-whisper because ctranslate2 and onnxruntime each bundle an OpenMP
+runtime and loading both aborts the process.
