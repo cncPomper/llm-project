@@ -2,6 +2,10 @@ __pycache__/
 *.pyc
 .env
 data/raw_transcripts/*.json
+# Whisper fallback intermediates: a single episode is ~300 MB of wav.
+data/audio/
+# Ingestion run logs
+*.log
 .streamlit/
 *.egg-info/
 .venv/

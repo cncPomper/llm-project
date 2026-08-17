@@ -14,6 +14,10 @@ dependencies = [
     # every video, failing with "ParseError: no element found". 1.x is the
     # only version that can fetch anything at all.
     "youtube-transcript-api==1.2.4",
+    # Exempt from the cap for the same reason, and more acutely: yt-dlp tracks
+    # YouTube's extractor changes and is effectively broken within months of
+    # release. Left unpinned so `uv lock` takes the newest available.
+    "yt-dlp",
     "faster-whisper==1.0.3",
     "prefect==2.19.9",
     "qdrant-client==1.9.1",
@@ -45,6 +49,7 @@ dependencies = [
 # regardless. Raise this date only alongside upgrading the pins above.
 exclude-newer = "2024-08-15T00:00:00Z"
 
-# youtube-transcript-api is exempt: it talks to a live third-party endpoint
-# that has since changed, so it must track upstream rather than the cap.
-exclude-newer-package = { youtube-transcript-api = "2026-08-16T00:00:00Z" }
+# Both of these are exempt: they talk to live YouTube endpoints that have since
+# changed, so they must track upstream rather than the cap. yt-dlp in particular
+# needs re-locking whenever YouTube breaks extraction again.
+exclude-newer-package = { youtube-transcript-api = "2026-08-16T00:00:00Z", yt-dlp = "2026-08-16T00:00:00Z" }
