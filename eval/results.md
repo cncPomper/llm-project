@@ -54,3 +54,22 @@ failures were not evenly distributed across strategies, so `rewrite_rag`
 absorbed most of them and appeared to lose by a full point. Fixed by
 stripping the fence and dropping unparseable samples instead of scoring
 them zero.
+
+## LLM Answer Evaluation -- hand-written conversational questions
+
+| Strategy | Faithfulness | Relevance | Specificity | N |
+|---|---|---|---|---|
+| plain_rag | 4.17 | 4.46 | 3.54 | 24 |
+| rewrite_rag | 4.08 | 4.42 | 3.33 | 24 |
+| rewrite_rerank_rag | 3.79 | 4.25 | 3.25 | 24 |
+
+What query rewriting did to the first few questions:
+
+| Asked | Rewritten to |
+|---|---|
+| my dog goes nuts every time someone rings the doorbell, what do i do | how to stop dog barking at doorbell |
+| whats that calm energy thing the dog guy keeps going on about | calm energy dog training technique |
+| is walking the dog every day actually that important or is it overrated | importance of daily dog walking |
+| how are you supposed to say hi to a dog you dont know | how to greet an unfamiliar dog |
+| my rescue is super anxious all the time, any idea whats going on there | rescue dog anxiety causes and solutions |
+| what did elon actually end up cutting with that government efficiency thing | Elon Musk government efficiency cuts details |

@@ -145,25 +145,59 @@ across the board: answers are faithful and relevant but stay general. That
 is the thing worth attacking next, and it points at retrieval granularity
 rather than prompting.
 
-Two caveats on how much weight these numbers carry:
+One caveat on this table: an earlier run reported rewriting losing by a full
+point. That was a bug, not a finding — the judge scored unparseable replies
+as 0/0/0 and the failures clustered on one strategy. See `eval/results.md`
+for the superseded numbers and the cause.
 
-- The questions are LLM-generated *from* a chunk, so they are keyword-rich
-  and already retrieval-friendly. None resemble the vague, conversational
-  question rewriting exists to fix.
-- An earlier run of this table reported rewriting losing by a full point.
-  That was a bug, not a finding — the judge scored unparseable replies as
-  0/0/0, and the failures clustered on one strategy. See
-  `eval/results.md` for the superseded numbers and the cause.
+### Does query rewriting earn its keep?
+
+The set above cannot answer that: its questions are LLM-generated *from* a
+chunk, so they arrive keyword-rich and retrieval-ready — already the shape
+rewriting is meant to produce. So `eval/questions_conversational.jsonl` adds
+24 hand-written questions in the register a listener actually uses
+("my dog goes nuts every time someone rings the doorbell, what do i do"):
+
+```bash
+uv run python -m eval.llm_eval \
+    --questions eval/questions_conversational.jsonl \
+    --label "LLM Answer Evaluation -- hand-written conversational questions"
+```
+
+| Strategy | Faithfulness | Relevance | Specificity |
+|---|---|---|---|
+| plain_rag | 4.17 | 4.46 | 3.54 |
+| rewrite_rag | 4.08 | 4.42 | 3.33 |
+| rewrite_rerank_rag | 3.79 | 4.25 | 3.25 |
+
+**Rewriting still does not help**, on the exact question shape it was built
+for. Not because it misfires — the rewrites are good
+("my dog goes nuts every time someone rings the doorbell" → "how to stop dog
+barking at doorbell") — but because embedding search already handles
+conversational phrasing well enough that a cleaner query changes little.
+
+Note every score is lower than on the synthetic set (specificity 3.54 vs
+4.10): real questions are simply harder, and a benchmark built from your own
+chunks flatters the system. That gap is the most useful number here.
+
+The honest read is that **query rewriting is not earning its keep on this
+corpus** — it costs an LLM call per query for no measured gain. It stays as
+a sidebar toggle rather than being removed, because a larger or more
+heterogeneous corpus could change the answer.
 
 ## 6. Interface
 
 Streamlit chat app (`app/streamlit_app.py`):
 
 - Chat-style Q&A
-- Every answer shows **source cards**: episode title, speaker (if
-  diarized), timestamp range, a "▶ jump to moment" deep link, and the
-  quoted transcript excerpt
+- Every answer shows **source cards**: episode title, timestamp range, a
+  "▶ jump to moment" deep link, and the quoted transcript excerpt
 - 👍 / 👎 feedback buttons per answer, logged to Postgres
+- Sidebar switches retrieval strategy and toggles query rewriting per query
+
+![Streamlit interface](imgs/ui.png)
+
+A short screen recording is in `imgs/demo.mp4`.
 
 ## 7. Ingestion Pipeline
 
@@ -188,6 +222,8 @@ Set `REINGEST=1` to force re-ingestion after changing the chunking constants,
 which the already-ingested check would otherwise skip.
 
 ## 8. Monitoring
+
+![Grafana monitoring dashboard](imgs/grafana.png)
 
 All queries, retrieved sources, generated answers, latency, and feedback
 are logged to Postgres (`monitoring/schema.sql`). `monitoring/grafana/`
@@ -367,13 +403,17 @@ podcast-explorer/
       — results in `eval/results.md`
 - [x] Confirm `RETRIEVAL_STRATEGY=hybrid_rerank` against the numbers
       (best on both Hit Rate and MRR)
-- [ ] Re-run the LLM eval against hand-written, conversational questions —
-      the synthetic set is biased toward already-well-formed queries, so it
-      cannot show whether query rewriting earns its keep
-- [ ] Attack specificity, the weakest judged dimension — answers are
-      faithful but general, which points at retrieval granularity
-- [ ] Record a short Streamlit screen-capture demo and embed it here
-- [ ] Add screenshots of the Grafana dashboard
+- [x] Re-run the LLM eval against hand-written, conversational questions —
+      answered: rewriting does not earn its keep on this corpus
+- [x] Record a short Streamlit screen-capture demo (`imgs/demo.mp4`)
+- [x] Add screenshots of the Grafana dashboard
+- [ ] Attack specificity, the weakest judged dimension on both question sets
+      — answers are faithful but general, which points at retrieval
+      granularity rather than prompting
+- [ ] Strip sponsor reads at ingestion; they are indexed as ordinary content
+      and surface as retrieval hits
+- [ ] Collect real user feedback — the votes currently in `query_log` were
+      generated from an automated quality judgment, not human clicks
 
 Known limitation: sponsor reads are indexed as ordinary transcript content,
 so ad copy can surface as a retrieval hit and will depress eval scores.

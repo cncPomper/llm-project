@@ -12,7 +12,19 @@ hallucinated timestamps/numbers), relevance, and specificity.
 Run from the repo root:
 
   python -m eval.llm_eval
+
+The default question set is eval/ground_truth.jsonl, whose questions are
+LLM-generated *from* a chunk and therefore already keyword-rich -- which is
+exactly the shape query rewriting is supposed to produce, so that set cannot
+show whether rewriting earns its keep. Point --questions at a hand-written,
+conversational set to test that:
+
+  python -m eval.llm_eval --questions eval/questions_conversational.jsonl \
+      --label "LLM Answer Evaluation -- conversational questions"
+
+Any JSONL file with a "question" field works; nothing else is read.
 """
+import argparse
 import json
 import os
 from pathlib import Path
@@ -82,25 +94,37 @@ def judge(question: str, answer: str, chunks: list[dict]) -> dict | None:
 
 def run_strategy(name: str, question: str) -> dict:
     if name == "plain_rag":
-        chunks = retrieve(question, strategy="hybrid")
+        search_query = question
+        chunks = retrieve(search_query, strategy="hybrid")
     elif name == "rewrite_rag":
-        chunks = retrieve(rewrite_query(question), strategy="hybrid")
+        search_query = rewrite_query(question)
+        chunks = retrieve(search_query, strategy="hybrid")
     elif name == "rewrite_rerank_rag":
-        chunks = retrieve(rewrite_query(question), strategy="hybrid_rerank")
+        search_query = rewrite_query(question)
+        chunks = retrieve(search_query, strategy="hybrid_rerank")
     else:
         raise ValueError(name)
 
     answer = generate_answer(question, chunks)
-    return {"answer": answer, "scores": judge(question, answer, chunks)}
+    return {
+        "answer": answer,
+        "search_query": search_query,
+        "scores": judge(question, answer, chunks),
+    }
 
 
-def main(sample_size: int = 30):
-    with open(GROUND_TRUTH_PATH) as f:
-        ground_truth = [json.loads(line) for line in f][:sample_size]
+def main(sample_size: int = 30,
+         questions_path: Path = GROUND_TRUTH_PATH,
+         label: str = "LLM Answer Evaluation"):
+    with open(questions_path, encoding="utf-8") as f:
+        ground_truth = [json.loads(line) for line in f if line.strip()][:sample_size]
 
     if not ground_truth:
-        print("No ground truth found -- run eval/generate_ground_truth.py first.")
+        print(f"No questions found in {questions_path} -- for the default set, "
+              f"run eval/generate_ground_truth.py first.")
         return
+
+    print(f"{len(ground_truth)} questions from {questions_path.name}\n", flush=True)
 
     strategies = ["plain_rag", "rewrite_rag", "rewrite_rerank_rag"]
     dims = ("faithfulness", "relevance", "specificity")
@@ -109,14 +133,21 @@ def main(sample_size: int = 30):
     # samples were dropped would understate every score it dropped one from.
     scored = dict.fromkeys(strategies, 0)
 
-    for item in ground_truth:
+    # Kept so the write-up can show what rewriting actually did to a
+    # conversational question, which the score table alone cannot convey.
+    rewrites: list[tuple[str, str]] = []
+
+    for i, item in enumerate(ground_truth, 1):
         for s in strategies:
             result = run_strategy(s, item["question"])
+            if s == "rewrite_rag" and len(rewrites) < 6:
+                rewrites.append((item["question"], result["search_query"]))
             if result["scores"] is None:
                 continue
             scored[s] += 1
             for dim in dims:
                 totals[s][dim] += result["scores"].get(dim, 0)
+        print(f"[{i:2d}/{len(ground_truth)}] {item['question'][:60]}", flush=True)
 
     table = "| Strategy | Faithfulness | Relevance | Specificity | N |\n|---|---|---|---|---|\n"
     for s in strategies:
@@ -132,10 +163,23 @@ def main(sample_size: int = 30):
         table += ("\nUnparseable judge replies, excluded from the averages: "
                   + ", ".join(f"{s} {n}" for s, n in dropped.items()) + "\n")
 
+    if rewrites:
+        table += "\nWhat query rewriting did to the first few questions:\n\n"
+        table += "| Asked | Rewritten to |\n|---|---|\n"
+        for raw, rewritten in rewrites:
+            table += f"| {raw} | {rewritten} |\n"
+
     print(table)
-    with open(RESULTS_PATH, "a") as f:
-        f.write("\n## LLM Answer Evaluation\n\n" + table)
+    with open(RESULTS_PATH, "a", encoding="utf-8") as f:
+        f.write(f"\n## {label}\n\n" + table)
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--questions", type=Path, default=GROUND_TRUTH_PATH,
+                        help="JSONL file with a 'question' field per line")
+    parser.add_argument("--label", default="LLM Answer Evaluation",
+                        help="Heading written to eval/results.md")
+    parser.add_argument("-n", "--sample-size", type=int, default=30)
+    args = parser.parse_args()
+    main(sample_size=args.sample_size, questions_path=args.questions, label=args.label)
