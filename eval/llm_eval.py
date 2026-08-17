@@ -44,7 +44,32 @@ Return ONLY a JSON object like:
 {{"faithfulness": <1-5>, "relevance": <1-5>, "specificity": <1-5>}}"""
 
 
-def judge(question: str, answer: str, chunks: list[dict]) -> dict:
+def parse_scores(raw: str) -> dict | None:
+    """Parse the judge's JSON, tolerating a Markdown code fence.
+
+    Despite "Return ONLY a JSON object", the model wraps its answer in
+    ```json ... ``` for longer prompts, which json.loads rejects. Returns None
+    when the response genuinely cannot be parsed, so the caller can drop the
+    sample rather than score it.
+    """
+    text = raw.strip()
+    if text.startswith("```"):
+        # Strip the opening fence (with optional language tag) and closing one.
+        text = text.split("\n", 1)[-1] if "\n" in text else text
+        text = text.rsplit("```", 1)[0]
+    try:
+        return json.loads(text.strip())
+    except json.JSONDecodeError:
+        return None
+
+
+def judge(question: str, answer: str, chunks: list[dict]) -> dict | None:
+    """Returns None if the judge's reply could not be parsed.
+
+    Deliberately NOT a zero score: scoring an unparseable reply 0/0/0 silently
+    turns a formatting quirk into a damning result, and pulls a strategy's
+    average down hard for reasons that have nothing to do with its answers.
+    """
     excerpts = "\n\n".join(c["text"] for c in chunks)
     resp = client.chat.completions.create(
         model=MODEL,
@@ -52,10 +77,7 @@ def judge(question: str, answer: str, chunks: list[dict]) -> dict:
             question=question, answer=answer, excerpts=excerpts)}],
         temperature=0,
     )
-    try:
-        return json.loads(resp.choices[0].message.content)
-    except json.JSONDecodeError:
-        return {"faithfulness": 0, "relevance": 0, "specificity": 0}
+    return parse_scores(resp.choices[0].message.content)
 
 
 def run_strategy(name: str, question: str) -> dict:
@@ -69,8 +91,7 @@ def run_strategy(name: str, question: str) -> dict:
         raise ValueError(name)
 
     answer = generate_answer(question, chunks)
-    scores = judge(question, answer, chunks)
-    return {"answer": answer, **scores}
+    return {"answer": answer, "scores": judge(question, answer, chunks)}
 
 
 def main(sample_size: int = 30):
@@ -82,19 +103,34 @@ def main(sample_size: int = 30):
         return
 
     strategies = ["plain_rag", "rewrite_rag", "rewrite_rerank_rag"]
-    totals = {s: {"faithfulness": 0, "relevance": 0, "specificity": 0} for s in strategies}
+    dims = ("faithfulness", "relevance", "specificity")
+    totals = {s: dict.fromkeys(dims, 0) for s in strategies}
+    # Counted per strategy, because averaging over the full sample when some
+    # samples were dropped would understate every score it dropped one from.
+    scored = dict.fromkeys(strategies, 0)
 
     for item in ground_truth:
         for s in strategies:
             result = run_strategy(s, item["question"])
-            for dim in ("faithfulness", "relevance", "specificity"):
-                totals[s][dim] += result[dim]
+            if result["scores"] is None:
+                continue
+            scored[s] += 1
+            for dim in dims:
+                totals[s][dim] += result["scores"].get(dim, 0)
 
-    n = len(ground_truth)
     table = "| Strategy | Faithfulness | Relevance | Specificity | N |\n|---|---|---|---|---|\n"
     for s in strategies:
-        f_, r_, sp_ = (totals[s][d] / n for d in ("faithfulness", "relevance", "specificity"))
+        n = scored[s]
+        if not n:
+            table += f"| {s} | - | - | - | 0 |\n"
+            continue
+        f_, r_, sp_ = (totals[s][d] / n for d in dims)
         table += f"| {s} | {f_:.2f} | {r_:.2f} | {sp_:.2f} | {n} |\n"
+
+    dropped = {s: len(ground_truth) - scored[s] for s in strategies if scored[s] < len(ground_truth)}
+    if dropped:
+        table += ("\nUnparseable judge replies, excluded from the averages: "
+                  + ", ".join(f"{s} {n}" for s, n in dropped.items()) + "\n")
 
     print(table)
     with open(RESULTS_PATH, "a") as f:

@@ -1,8 +1,10 @@
 # Podcast Knowledge Explorer
 
-**Multi-speaker podcast transcript RAG for Huberman Lab / Lex Fridman style long-form episodes.**
+![Podcast Knowledge Explorer](imgs/podcaster.jpg)
 
-Ask a question like *"What does Huberman recommend for morning light exposure?"* and get a
+**Multi-speaker podcast transcript RAG for long-form episodes.**
+
+Ask a question like *"What does Cesar Millan mean by calm assertive energy?"* and get a
 direct answer plus the exact video timestamp(s) and deep links to jump straight to that
 moment — no scrubbing through 2–3 hour episodes.
 
@@ -129,22 +131,29 @@ specificity), scored 1–5 over 30 questions:
 
 | Strategy | Faithfulness | Relevance | Specificity |
 |---|---|---|---|
-| **plain_rag** | **4.67** | **4.83** | **3.97** |
-| rewrite_rag | 3.73 | 3.87 | 3.07 |
-| rewrite_rerank_rag | 4.23 | 4.23 | 3.57 |
+| plain_rag | 4.73 | 4.87 | 4.10 |
+| rewrite_rag | 4.77 | 4.90 | 3.93 |
+| rewrite_rerank_rag | 4.57 | 4.73 | 4.03 |
 
-**Query rewriting scored worse on every dimension**, which is worth reading
-carefully rather than taking at face value. `generate_ground_truth.py`
-produces questions *from* a chunk, so they are already keyword-rich and
-specific — exactly the shape rewriting is meant to produce. Rewriting an
-already-optimal query can only blur it, and the reranked variant recovers
-about half the loss. The eval set contains none of the vague, conversational
-questions rewriting exists to fix, so the honest conclusion is "rewriting
-does not help well-formed questions", not "rewriting is useless". Rewriting
-stays available as a sidebar toggle for that reason.
+**All three are indistinguishable.** The spread is ~0.2 on a 1–5 scale at
+N=30, which is noise, not a result — the rubric does not separate strategies
+that share a corpus and a generator. Query rewriting neither helps nor hurts
+here, so it stays available as a sidebar toggle.
 
-A more representative benchmark would need hand-written questions phrased
-the way a listener actually asks them.
+The one consistent signal is that **specificity is the weakest dimension**
+across the board: answers are faithful and relevant but stay general. That
+is the thing worth attacking next, and it points at retrieval granularity
+rather than prompting.
+
+Two caveats on how much weight these numbers carry:
+
+- The questions are LLM-generated *from* a chunk, so they are keyword-rich
+  and already retrieval-friendly. None resemble the vague, conversational
+  question rewriting exists to fix.
+- An earlier run of this table reported rewriting losing by a full point.
+  That was a bug, not a finding — the judge scored unparseable replies as
+  0/0/0, and the failures clustered on one strategy. See
+  `eval/results.md` for the superseded numbers and the cause.
 
 ## 6. Interface
 
@@ -359,8 +368,10 @@ podcast-explorer/
 - [x] Confirm `RETRIEVAL_STRATEGY=hybrid_rerank` against the numbers
       (best on both Hit Rate and MRR)
 - [ ] Re-run the LLM eval against hand-written, conversational questions —
-      the synthetic set is biased toward already-well-formed queries, which
-      is why query rewriting scores badly on it
+      the synthetic set is biased toward already-well-formed queries, so it
+      cannot show whether query rewriting earns its keep
+- [ ] Attack specificity, the weakest judged dimension — answers are
+      faithful but general, which points at retrieval granularity
 - [ ] Record a short Streamlit screen-capture demo and embed it here
 - [ ] Add screenshots of the Grafana dashboard
 
